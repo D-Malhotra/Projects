@@ -1,0 +1,120 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(grid)
+library(gridExtra)
+df <- read.csv("Real_estate.csv")
+sum(is.na(df)) #No missing values
+
+hist(df$X1.transaction.date)
+df$year <- as.numeric(df$X1.transaction.date <=  2013 ) #Cars made up till 2013 will have indicator 1 , ranges from 2012.6, till 2013.6
+
+#we make the number of convenience stores also an indicator with 0 having its own indicator as could reasonably lower the market value of the house if you must travel far away to collect groceries. We then use another indicator to identify less 0<x<=4 stores, the rest are automatically accounted for. 
+y <- df$Y.house.price.of.unit.area
+x <- df$X3.distance.to.the.nearest.MRT.station
+x_transform <- log(x)
+plot(x_transform, df$Y.house.price.of.unit.area)
+lm_log <- lm(y~x_transform)
+plot(x, y, xlab='MRT distance', ylab='House Price per unit area')
+
+curve(coef(lm_log)[1] + 
+        coef(lm_log)[2]*log(x), 
+      add=TRUE, 
+      col = "red")
+
+
+df$many_stores <- as.numeric(df$X4.number.of.convenience.stores > 4)
+df$four_stores <- as.numeric(df$X4.number.of.convenience.stores <5 & df$X4.number.of.convenience.stores >0 )
+
+#Normalization 
+df$norm_age <- (df$X2.house.age - mean(df$X2.house.age))/sd(df$X2.house.age)
+df$norm_log_dist <- (log(df$X3.distance.to.the.nearest.MRT.station) - mean(log(df$X3.distance.to.the.nearest.MRT.station)))/sd(log(df$X3.distance.to.the.nearest.MRT.station))
+df$norm_long <- (df$X6.longitude - mean(df$X6.longitude))/sd(df$X6.longitude)
+df$norm_lat <- (df$X5.latitude - mean(df$X5.latitude))/sd(df$X5.latitude)
+
+df <- df[-c(1:7)] #Removes untransformed variables 
+N <- length(df$norm_age) #Size of data set
+df$y <- df$Y.house.price.of.unit.area
+df <- df[-c(1)]
+```
+
+```{r}
+#Shuffling the data 
+shuffled_data= df[sample(1:nrow(df)),]
+#training set is 70% of the data
+train_size <- N*0.7
+training_data <- shuffled_data[1:floor(train_size), ]
+test_data <- shuffled_data[ceiling(train_size):N, ]
+
+#Model generation
+full_ls <- lm(y~norm_log_dist +norm_lat+ norm_long+norm_age+ year+many_stores+four_stores, data = training_data)
+summary(full_ls)
+partial_ls <- lm(y~norm_log_dist +norm_lat+norm_age+ many_stores+year, data = training_data)
+summary(partial_ls)
+#Saving as image
+ls_results_full <- (data.frame(unclass(coefficients(summary(full_ls)))))
+ls_results<- ls_results_full[, -3]
+myTable <- tableGrob(
+  ls_results, 
+  theme = ttheme_default(core = list(bg_params = list(fill = "grey99")))
+)
+grid.table(ls_results)
+
+#Coefficients
+ls_beta <- coef(full_ls)
+
+ls_beta#Matrices with ones for intercept
+
+X_mat_train <- cbind(rep(1, floor(0.7*N)), as.matrix(training_data[, 1:7]))
+X_mat_test <- cbind(rep(1, N - floor(0.7*N)), as.matrix(test_data[, 1:7]))
+ls_y_pred_train <- X_mat_train %*% ls_beta 
+ls_y_pred_test <- X_mat_test %*% ls_beta
+y_test <- as.matrix(test_data[, 8])
+y_train <- as.matrix(training_data[, 8])
+residuals <- y_train - ls_y_pred_train 
+plot(partial_ls, which = 1 )
+plot(partial_ls, which = 2)
+hist(residuals)
+sum((y_test - ls_y_pred_test)**2)/(sum((y_test - mean(y_test))**2))
+sum((y_train - ls_y_pred_train)**2)/(sum((y_test - mean(y_train))**2))
+
+
+```
+
+```{r}
+X_train <- as.matrix(training_data[, c(1, 2, 4, 5, 6, 7)])
+X_test <- as.matrix(test_data[, c(1, 2, 4, 5, 6, 7)])
+X_mat_train <- cbind(rep(1, floor(0.7*N)), as.matrix(training_data[, c(1, 2, 4, 5, 6, 7)]))
+X_mat_test <- cbind(rep(1, N - floor(0.7*N)), as.matrix(test_data[, c(1, 2, 4, 5, 6, 7)]))
+ridge_optimal <- glmnet(X_train, y_train, alpha = 0, lambda = 0.61)
+beta_ridge <- as.matrix(coefficients(ridge_optimal))
+y_pred <- X_mat_test %*% beta_ridge
+y_pred_train <- X_mat_train %*% beta_ridge
+1 - sum((y_train - y_pred_train)^2)/sum((y_train - mean(y_train))^2)
+1 - sum((y_test - y_pred)^2)/sum((y_test - mean(y_test))^2)
+ridge_resid <- y_train - y_pred_train
+
+```
+
+```{r}
+library(glmnet)
+lambda_vals <- seq(0.1, 2, 0.001)
+lasso_lambda <- cv.glmnet(X_train, y_train, alpha=1, lambda = lambda_vals)$lambda.min
+optimal_lasso <- glmnet(X_train, y_train, alpha = 1, lambda = lasso_lambda)
+summary(optimal)
+lasso_vals <- as.matrix(coefficients(optimal_lasso))
+lasso_y_pred_train <- X_mat_train %*% lasso_vals
+1 - sum((y_train - lasso_y_pred_train)^2)/sum((y_train - mean(y_train))^2)
+lasso_y_pred_test <- X_mat_test %*%lasso_vals 
+1 - sum((y_test - lasso_y_pred_test)^2)/sum((y_test - mean(y_test))^2)
+```
+```{r}
+
+```
+
+
+
