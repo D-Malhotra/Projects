@@ -1,0 +1,305 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(rnaturalearth)
+#Load data
+my_data <- read_excel("Project15.xlsx")
+#store important data points
+lat <- my_data$lat
+lon <- my_data$lon
+loc <- cbind(lat, lon)
+tmax <- my_data$tmax
+#Defining covariance kernel 
+covar_kernel <- function(temp, loc_data, beta){
+  #start with matrix of distances
+  distance_matrix <- as.matrix(dist(loc_data))
+  #sample variance for variable
+  sig2 <- var(temp)
+  #covariance kernel 
+  cov_kernel <- sig2 * exp(-beta * distance_matrix^2)
+  return(cov_kernel)
+}
+cov_kernel <- covar_kernel(tmax, loc, 1)
+#mean of variable
+mean_val <- mean(tmax)
+```
+
+```{r}
+K_vec <- function(t0, temp, loc, beta){
+  sig2 = var(temp)
+  K <- sig2 * exp(-beta * rowSums((t(t(loc)-t0))^2)) #covariance from each point 
+  return(K)
+}
+#Simple krigging
+simple_krigg <- function(t0, temp, loc, beta){
+  #covariance of each point with t0 (K vector)
+  K <- K_vec(t0, temp, loc, beta) 
+  #prediction equation
+  temp_kernel <- covar_kernel(temp, loc, beta)
+  xt0 <- mean(temp) + t(K) %*% solve(temp_kernel, temp - mean(temp))
+  #We can compute the mean squared prediction error as:
+  pred_error <- var(temp) - t(K) %*% solve(temp_kernel, K)
+  return(list(xt0, pred_error))
+}
+
+#predictions for imperial and UCL with beta=1
+t0_imp <- c(51.499, -0.175) #location of imperial 
+K <- K_vec(t0_imp, tmax, loc, 1)
+#t0_ucl <- c(5, 100000)#location of UCL
+t0_ucl <- c(51.525, -0.134)#location of UCL
+simple_imp <- simple_krigg(t0_imp, tmax, loc, 1)
+simple_ucl <- simple_krigg(t0_ucl, tmax, loc, 1)
+
+#predictions for imperial and UCL with beta=2
+simple_imp2 <- simple_krigg(t0_imp, tmax, loc, 2)
+simple_ucl2 <- simple_krigg(t0_ucl, tmax, loc, 2)
+
+```
+
+The prediction error for ... is greater than that for ... because of the proximity to weather stations and so the (KsigmaK) term is larger for ... 
+
+```{r}
+#Ordinary Krigging 
+
+ord_krigg <- function(t0, temp, loc, beta){
+  K <- K_vec(t0, temp, loc, beta)
+  n = length(K)
+  ones <- rep(1, n)
+  cov_kernel <- covar_kernel(temp, loc, beta)
+  sigz <- solve(cov_kernel, temp)
+  sigk <- solve(cov_kernel, K)
+  sig1 <- solve(cov_kernel, ones)
+  pred <- t(K) %*% sigz + (1 - sum(sigk)) * sum(sigz)/(sum(sig1))
+  error <- var(temp) - (t(K) %*% sigk) + (1 - sum(sigk))^2/(sum(sig1))
+  return(list(pred, error))
+}
+ord_imp <- ord_krigg(t0_imp, tmax, loc, beta=1)
+ord_ucl <- ord_krigg(t0_ucl, tmax, loc, beta=1)
+```
+
+The prediction error in ... krigging is worse than that for ... krigging as ...
+
+```{r}
+#Ordinary Krigging across the UK
+
+lat_seq <- seq(50,59.5,0.05) # grid of latitudes to be predicted
+lon_seq <- seq(-10.5,3,0.05) # grid of longitudes to be predicted
+latl <- length(lat_seq)
+lonl <- length(lon_seq)
+
+XP_ord <- matrix(0,lonl,latl)
+XE_ord <- matrix(0,lonl,latl)
+for (ii in 1:latl) { # kriging procedure
+for (jj in 1:lonl) {
+t0 <- c(lat_seq[ii], lon_seq[jj]) # K vector
+XP_ord[jj, ii] <- as.numeric(ord_krigg(t0, tmax, loc, beta=1)[1]) # predictions
+XE_ord[jj, ii] <- as.numeric(ord_krigg(t0, tmax, loc, beta=1)[2])}} # prediction errors
+
+
+wm = map_data('world')
+ggplot() +
+geom_polygon(data=wm,aes(x=long,y=lat,group=group),fill='gray90',col=1) +
+coord_fixed(ratio=1.3,xlim=c(-10.5,3),ylim=c(50,59.5))+
+geom_point(aes(my_data$lon,my_data$lat,colour="red"))
+
+# plots (preliminaries)
+sea <- ne_download(scale = 10, type = 'ocean', category = "physical",
+returnclass = "sf") # this is to remove ocean predictions
+FPlat <- numeric(latl*lonl) # a (hacky) way of including sample points
+FPlat[1:length(my_data$lat)]<- my_data$lat
+FPlon <- numeric(latl*lonl)
+FPlon[1:length(my_data$lon)]<- my_data$lon
+
+# prediction plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XP_ord)))
+ggplot(data) + ggtitle("Ordinary Krigging predictions") +
+geom_contour_filled(aes(Lng,Lat,z=Var1),bins=20,color="white",linewidth=0) +
+guides(colour = "colorbar", size = "legend", shape = "legend") + geom_sf(data = sea, fill = "white") + coord_sf(xlim = c(-10.5, 3), ylim = c(50, 59.5), expand = FALSE) + geom_point(aes(FPlon,FPlat),colour="red")
+
+# error plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XE_ord)))
+ggplot(data) + ggtitle("Ordinary Krigging prediction error") +
+geom_contour_filled(aes(Lng,Lat,z=Var1),bins=10,color="white",linewidth=0) +
+guides(colour = "colorbar", size = "legend", shape = "legend") +
+geom_sf(data = sea, fill = "white") +
+coord_sf(ylim = c(50, 59.5), xlim = c(-10.5, 3), expand = FALSE) +
+geom_point(aes(FPlon,FPlat),colour="red")
+```
+
+```{r}
+#Universal Krigging
+
+#determine mean function using linear regression 
+mean_func <- lm(tmax~lat, data = my_data)
+alpha1 <- as.numeric(coefficients(mean_func)[1])
+alpha2 <- as.numeric(coefficients(mean_func)[2])
+M <- alpha1 + alpha2 * lat
+
+uni_krigg <- function(t0, temp, loc, beta){
+  K <- K_vec(t0, temp, loc, beta)
+  n = length(K)
+  mt0 <- alpha2 * t0[1] + alpha1
+  cov_kernel <- covar_kernel(temp, loc, beta)
+  sigz <- solve(cov_kernel, temp)
+  sigk <- solve(cov_kernel, K)
+  sigm <- solve(cov_kernel, M)
+  pred <- t(K) %*% sigz + t(mt0 - t(M) %*% sigk) * (t(M) %*% sigz)/(t(M)%*%sigm)
+  error <- var(temp) - (t(K) %*% sigk) + (mt0 - t(M) %*% sigk) * (mt0 - t(M)%*%sigk)/(t(M) %*% sigm)
+  return(list(pred, error))
+}
+
+uni_imp <- uni_krigg(t0_imp, tmax, loc, beta=1)
+
+
+#Plot prediction and prediction error 
+
+lat_seq <- seq(50,59.5,0.05) # grid of latitudes to be predicted
+lon_seq <- seq(-10.5,3,0.05) # grid of longitudes to be predicted
+latl <- length(lat_seq)
+lonl <- length(lon_seq)
+
+XP_uni <- matrix(0,lonl,latl)
+XE_uni <- matrix(0,lonl,latl)
+for (ii in 1:latl) { # kriging procedure
+for (jj in 1:lonl) {
+t0 <- c(lat_seq[ii], lon_seq[jj]) # K vector
+XP_uni[jj, ii] <- as.numeric(uni_krigg(t0, tmax, loc, beta=1)[1]) # predictions
+XE_uni[jj, ii] <- as.numeric(uni_krigg(t0, tmax, loc, beta=1)[2])}} # prediction errors
+
+
+wm = map_data('world')
+ggplot() +
+geom_polygon(data=wm,aes(x=long,y=lat,group=group),fill='gray90',col=1) +
+coord_fixed(ratio=1.3,xlim=c(-10.5,3),ylim=c(50,59.5))+
+geom_point(aes(my_data$lon,my_data$lat,colour="red"))
+
+# plots (preliminaries)
+sea <- ne_download(scale = 10, type = 'ocean', category = "physical",
+returnclass = "sf") # this is to remove ocean predictions
+FPlat <- numeric(latl*lonl) # a (hacky) way of including sample points
+FPlat[1:length(my_data$lat)]<- my_data$lat
+FPlon <- numeric(latl*lonl)
+FPlon[1:length(my_data$lon)]<- my_data$lon
+
+# prediction plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XP_uni)))
+ggplot(data) + ggtitle("Universal Krigging predictions") +
+geom_contour_filled(aes(Lng,Lat,z=Var1),bins=20,color="white",linewidth=0) +
+guides(colour = "colorbar", size = "legend", shape = "legend") + geom_sf(data = sea, fill = "white") + coord_sf(xlim = c(-10.5, 3), ylim = c(50, 59.5), expand = FALSE) + geom_point(aes(FPlon,FPlat),colour="red")
+
+# error plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XE_uni)))
+ggplot(data) + ggtitle("Universal Krigging prediction error") +
+geom_contour_filled(aes(Lng,Lat,z=Var1),bins=10,color="white",linewidth=0) +
+guides(colour = "colorbar", size = "legend", shape = "legend") +
+geom_sf(data = sea, fill = "white") +
+coord_sf(ylim = c(50, 59.5), xlim = c(-10.5, 3), expand = FALSE) +
+geom_point(aes(FPlon,FPlat),colour="red")
+
+# difference plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XP_ord - XP_uni)))
+ggplot(data) + ggtitle("Difference plot") +
+geom_contour_filled(aes(Lng,Lat,z=Var1),bins=20,color="white",linewidth=0) +
+guides(colour = "colorbar", size = "legend", shape = "legend") + geom_sf(data = sea, fill = "white") + coord_sf(xlim = c(-10.5, 3), ylim = c(50, 59.5), expand = FALSE) + geom_point(aes(FPlon,FPlat),colour="red")
+
+```
+
+```{r}
+
+D = matrix(c(1/2, 0, 0, 2), nrow= 2)
+#Used the inverse matrix as i have latitude and longitude in a different format.
+R = matrix(c(cos(pi/4), -sin(pi/4), sin(pi/4), cos(pi/4)), nrow= 2)
+A = D%*%R
+#Ordinary Krigging with anisotropic covariance
+
+#covariance kernel 
+N <- length(lat)
+
+Sigma <- matrix(0, N, N) # covariance matrix
+# Parameters
+sigma <-  var(tmax)# provide the value for sigma
+beta <-  1 # provide the value for beta
+for (ii in 1:N) {
+  for (jj in 1:N) {
+    vec <- A %*% c(lat[ii] - lat[jj], lon[ii] - lon[jj])
+    d <- sum(vec^2)
+    Sigma[ii, jj] <- sigma * exp(-beta * d)
+  }}
+
+
+K_vec_ani <- function(t0, temp, loc, beta){
+  sig2 = var(temp)
+  K<- rep(0, N)
+  for (i in 1:N){
+    d <- sum((A %*% (loc[i, ]-t0))^2)
+    K[i] <- sig2 * exp(-beta * d)
+  }
+  return(K)
+}
+
+
+ord_krigg_ani <- function(t0, temp, loc, beta, Sigma_inv){
+  K <- K_vec_ani(t0, temp, loc, beta)
+  n <- length(K)
+  ones <- rep(1, n)
+  sigz <- Sigma_inv %*% temp
+  sigk <- Sigma_inv %*% K
+  sig1 <- Sigma_inv %*% ones
+  pred <- t(K) %*% sigz + (1 - sum(sigk)) * sum(sigz) / sum(Sigma_inv)
+  error <- var(temp) - (t(K) %*% sigk) + (1 - sum(sigk))^2 / sum(Sigma_inv)
+  
+  return(list(pred, error))
+}
+
+#Plot prediction and prediction error 
+
+lat_seq <- seq(50,59.5,0.1) # grid of latitudes to be predicted
+lon_seq <- seq(-10.5,3,0.1) # grid of longitudes to be predicted
+latl <- length(lat_seq)
+lonl <- length(lon_seq)
+
+XP_ani <- matrix(0,lonl,latl)
+XE_ani <- matrix(0,lonl,latl)
+for (ii in 1:latl) { # kriging procedure
+for (jj in 1:lonl) {
+t0 <- c(lat_seq[ii], lon_seq[jj]) # K vector
+XP_ani[jj, ii] <- as.numeric(ord_krigg_ani(t0, tmax, loc, beta=1, solve(Sigma))[1]) # predictions
+XE_ani[jj, ii] <- as.numeric(ord_krigg_ani(t0, tmax, loc, beta=1, solve(Sigma))[2])}} # prediction 
+
+
+
+wm = map_data('world')
+ggplot() +
+  geom_polygon(data=wm,aes(x=long,y=lat,group=group),fill='gray90',col=1) +
+  coord_fixed(ratio=1.3,xlim=c(-10.5,3),ylim=c(50,59.5))+
+  geom_point(aes(my_data$lon,my_data$lat,colour="red"))
+
+# plots (preliminaries)
+sea <- ne_download(scale = 10, type = 'ocean', category = "physical",
+                   returnclass = "sf") # this is to remove ocean predictions
+FPlat <- numeric(latl*lonl) # a (hacky) way of including sample points
+FPlat[1:length(my_data$lat)]<- my_data$lat
+FPlon <- numeric(latl*lonl)
+FPlon[1:length(my_data$lon)]<- my_data$lon
+
+# prediction plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XP_ani)))
+ggplot(data) + ggtitle("Anisotropic Predictions") +
+  geom_contour_filled(aes(Lng,Lat,z=Var1),bins=20,color="white",linewidth=0) +
+  guides(colour = "colorbar", size = "legend", shape = "legend") + geom_sf(data = sea, fill = "white") + coord_sf(xlim = c(-10.5, 3), ylim = c(50, 59.5), expand = FALSE) + geom_point(aes(FPlon,FPlat),colour="red")
+
+# error plot
+data <- cbind(expand.grid(Lng = lon_seq, Lat = lat_seq), P = c(expand.grid(XE_ani)))
+ggplot(data) + ggtitle("Anisotropic prediction error") +
+  guides(colour = "colorbar", size = "legend", shape = "legend") +
+  geom_contour_filled(aes(Lng,Lat,z=Var1),bins=10,color="white",linewidth=0) +
+  geom_sf(data = sea, fill = "white") +
+  coord_sf(ylim = c(50, 59.5), xlim = c(-10.5, 3), expand = FALSE) +
+  geom_point(aes(FPlon,FPlat),colour="red")
+```
