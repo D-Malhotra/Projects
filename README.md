@@ -1,2 +1,2 @@
 # Uni-Projects
-Projects completed at University
+Projects completed involving statistical analysis and machine learning
